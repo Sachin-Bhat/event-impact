@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import polars as pl
@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from .data import fetch_assets
 from .events import (
     EventWindowConfig,
+    dedupe_events,
     load_events_from_csv,
     load_events_from_fred,
     load_events_from_ics,
@@ -83,6 +84,15 @@ def _parse_args() -> argparse.Namespace:
         help="End date (YYYY-MM-DD) for FRED release fetch (defaults to Dec 31 of --year).",
     )
     parser.add_argument(
+        "--fred-time-overrides",
+        help='Override release time per category, e.g. "fomc=14:00,cpi=08:30".',
+    )
+    parser.add_argument(
+        "--fred-rolling-days",
+        type=int,
+        help="If set, fetch FRED releases from today to today+N days (overrides fred-start/fred-end defaults).",
+    )
+    parser.add_argument(
         "--output-csv",
         help="Optional path to write the impact table as CSV.",
     )
@@ -130,14 +140,35 @@ def main() -> None:
                 continue
             key, val = pair.split("=", 1)
             mapping[key.strip()] = int(val.strip())
-        fred_start = args.fred_start or f"{args.year}-01-01"
-        fred_end = args.fred_end or f"{args.year}-12-31"
+        if args.fred_rolling_days:
+            today = datetime.now(timezone.utc).date()
+            fred_start = today.isoformat()
+            fred_end = (today + timedelta(days=args.fred_rolling_days)).isoformat()
+        else:
+            fred_start = args.fred_start or f"{args.year}-01-01"
+            fred_end = args.fred_end or f"{args.year}-12-31"
+        time_overrides: dict[str, str] = {}
+        if args.fred_time_overrides:
+            for pair in args.fred_time_overrides.split(","):
+                if not pair.strip():
+                    continue
+                k, v = pair.split("=", 1)
+                time_overrides[k.strip()] = v.strip()
         try:
-            events.extend(load_events_from_fred(mapping, fred_start, fred_end))
+            events.extend(
+                load_events_from_fred(
+                    mapping,
+                    fred_start,
+                    fred_end,
+                    time_overrides=time_overrides,
+                )
+            )
         except Exception as exc:
             logging.warning("failed to load FRED events: %s", exc)
     if not events:
         raise SystemExit("No events matched categories.")
+
+    events = dedupe_events(events, prefer_fred=True)
 
     start, end = _date_bounds(events, window)
     logging.info(

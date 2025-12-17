@@ -302,6 +302,27 @@ def _parse_date_like(value: str | date | datetime) -> date:
     return datetime.fromisoformat(str(value)).date()
 
 
+def dedupe_events(events: list[Event], prefer_fred: bool = True) -> list[Event]:
+    """
+    Deduplicate events by (category, calendar date). If prefer_fred, keep FRED-sourced
+    events (metadata.source == 'fred') over built-ins/others.
+    """
+    buckets: dict[tuple[str, date], list[Event]] = {}
+    for ev in events:
+        key = (ev.category.lower(), ev.utc_timestamp().date())
+        buckets.setdefault(key, []).append(ev)
+
+    deduped: list[Event] = []
+    for evs in buckets.values():
+        if prefer_fred:
+            fred_events = [e for e in evs if (e.metadata or {}).get("source") == "fred"]
+            if fred_events:
+                evs = fred_events
+        evs_sorted = sorted(evs, key=lambda e: e.utc_timestamp())
+        deduped.append(evs_sorted[0])
+    return sorted(deduped, key=lambda e: e.utc_timestamp())
+
+
 def _fred_release_name(release_id: int, api_key: str) -> str:
     import httpx
 
@@ -321,6 +342,7 @@ def load_events_from_fred(
     end: str | date | datetime,
     tz: str = "America/New_York",
     release_time: str = "08:30",
+    time_overrides: dict[str, str] | None = None,
 ) -> list[Event]:
     """
     Build events from FRED release dates.
@@ -340,6 +362,8 @@ def load_events_from_fred(
     tzinfo = ZoneInfo(tz)
 
     events: list[Event] = []
+    time_overrides = time_overrides or {}
+
     for cat, rid in release_ids.items():
         # fetch release name once
         try:
@@ -366,7 +390,9 @@ def load_events_from_fred(
             d = datetime.fromisoformat(row["date"]).date()
             if d < start_d or d > end_d:
                 continue
-            ts = datetime(d.year, d.month, d.day, hour, minute, tzinfo=tzinfo)
+            override_time = time_overrides.get(cat, release_time)
+            o_hour, o_minute = [int(x) for x in override_time.split(":")]
+            ts = datetime(d.year, d.month, d.day, o_hour, o_minute, tzinfo=tzinfo)
             events.append(
                 Event(
                     name=f"{release_name} {d.isoformat()}",
