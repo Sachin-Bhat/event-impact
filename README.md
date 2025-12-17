@@ -41,3 +41,6 @@ uv run event-impact \                                             ─╯
 - Events are a built-in 2024/2025 calendar for CPI (8:30am ET), FOMC (2:00pm ET statements), and a small earnings sample. Extend by adding your own events via the flags above.
 - For intraday studies, stick to `1h` interval to avoid API throttling; `1d` works for longer windows.
 - Reaction minutes are relative to the event timestamp, using the first time the absolute cumulative return peaks after the announcement.
+
+### Disclaimer
+This project in any shape or form is purely educational and should not be treated as financial advice.
